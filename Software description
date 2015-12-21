@@ -1,0 +1,12 @@
+Database holds companies, list of recent RSS news articles for said company, recent stock information, and a general analysis of financial wellbeing based on that info.
+Has to list all companies in order of wellbeing.
+Ability to search companies by name, and field.
+Able to output recent stock info, data on company, and prediction for stock prices.
+
+todo:
+get non RSS APIs
+Pull data from APIs
+Get sentiment analyzer
+boilerplate RSS headlines with sentiment analyzer
+Setup Qt capable outputs for data
+Anything else

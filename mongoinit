@@ -1,0 +1,4 @@
+#!/bin/bash
+
+mkdir ./db
+mongod --dbpath ./db
