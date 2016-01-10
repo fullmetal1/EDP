@@ -6,6 +6,13 @@ import subprocess
 import time
 import string
 
+try:
+	client = pymongo.MongoClient()
+	db = client.RSSdb
+	db.createCollection( "RSSdb", { capped: true, max: 100 } )
+except:
+	print "database already exists"
+
 def initsystem ():
 	client = pymongo.MongoClient()
 	db = client.RSSdb
@@ -16,25 +23,15 @@ def initsystem ():
 		time.sleep(15*60)
 	return
 
-def initdb():
-	try:
-		client = pymongo.MongoClient()
-		db = client.RSSdb
-		db.createCollection( "RSSdb", { capped: true, max: 100 } )
-	except:
-		print "database already exists"
+
+def initdb ():
 	try:
 		insertentries(refreshfeeds())
 	except:
 		print "It's fucked Jim"
-#	print "HELLO WORLD"
-#	insertentries(refreshfeeds())
 	return
 
 def insertentries (RSSfeeds):
-	client = pymongo.MongoClient()
-	db = client.RSSdb	
-
 	for feed in RSSfeeds:
 		for entry in feed.entries:
 			post = { 
@@ -44,7 +41,8 @@ def insertentries (RSSfeeds):
 			"text": entry.summary,
 			"url": entry.link,
 			"date": entry.published,
-			"date stored": time.time()}
+			"date stored": time.time(),
+			"sentiment": getsentiment(entry.summary)}
 			if db.posts.find({"title": entry.title}).count() == 0:
 				db.posts.insert_one(post)
 				print "\"" + entry.title + "\" added"
@@ -65,10 +63,17 @@ def printfeeds (RSSfeeds):
 	for feed in RSSfeeds:
 		print feed.url
 		for entry in feed.entries:
-			print entry.title
+			print feed.url,
+			print entry.title,
+			print entry.author,
+			print entry.summary,
+			print entry.link,
+			print entry.published,
+			print time.time(),
+			print getsentiment(entry.summary)
 	return
 
-def getsentiment(statement):
+def getsentiment (statement):
 	sentimentdictionary = open('sentimentdictionary', 'r')
 	lines = sentimentdictionary.readlines()
 	dictwords = []
@@ -76,8 +81,8 @@ def getsentiment(statement):
 		dictword = line.split(',')
 		dictwords.append(dictword)
 	words = statement.split()
-	p = 0
-	n = 0
+	p = 1
+	n = 1
 	sentiments = ['p', 'n', 'a']
 	for word in words:
 		for dictword in dictwords:
@@ -88,11 +93,15 @@ def getsentiment(statement):
 					n+=1
 				break
 	print "P: " + str(p) + "\tN: " + str(n)
-	if p > n:
-		return	"positive"
-	elif n > p:
-		return "negative"
-	return "neutral"		
+	x = float(p)/n
+	return x		
+
+def listsentiments ():
+	cursor = db.posts.find({"sentiment": {"$gt": 0}},{"_id": 0, "title": 1, "sentiment": 1}).sort("sentiment", pymongo.DESCENDING)
+	for document in cursor:
+		print document
+	return
+
 
 def trainer (RSSfeeds):
 	sentimentdictionary = open('sentimentdictionary', 'r')
@@ -172,10 +181,14 @@ def listfeeds ():
 		print RSSURL.rstrip('\n')
 	return	
 
+def deldb ():
+	client.drop_database('RSSdb')
+	return
+
 def mainmenu ():
 	while True:
 #		try:
-		option = input( "Options:\n1: Create a database and save stuff\n2: list feed urls\n3: add feed to list\n4: remove feed from list\n5: print feeds\n6: train sentiment analyzer\n7: analyze sentiments\n8: exit\n")
+		option = input( "Options:\n1: Create a database and save stuff\n2: list feed urls\n3: add feed to list\n4: remove feed from list\n5: print feeds\n6: train sentiment analyzer\n7: analyze sentiments\n8: Show sentiments\n9: delete database\n10: exit\n")
 		if option == 1:
 			initdb()
 		elif option == 2:
@@ -194,8 +207,12 @@ def mainmenu ():
 			feeds = refreshfeeds()
 			for feed in feeds:
 				for entry in feed.entries:
-					print "\"" + entry.summary + "\"" + " " + getsentiment(entry.summary)
+					print "\"" + entry.summary + "\"" + " " + str(getsentiment(entry.summary))
 		elif option == 8:
+			listsentiments()
+		elif option == 9:
+			deldb()
+		elif option == 10:
 			return
 #		except:
 #			print "error"
