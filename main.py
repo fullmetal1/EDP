@@ -5,17 +5,26 @@ import pymongo
 import subprocess
 import time
 import string
+import urllib
+import csv
+import os
 
 try:
 	client = pymongo.MongoClient()
-	db = client.RSSdb
-	db.createCollection( "RSSdb", { capped: true, max: 100 } )
+	rdb = client.RSSdb
+	rdb.createCollection( "RSSdb", { capped: true, max: 100 } )
 except:
-	print "database already exists"
+	print "RSS database already exists"
+try:
+	cdb = client.Companydb
+	cdb.createCollection( "Companydb", { } )
+except:
+	print "Company database already exists"
+
 
 def initsystem ():
 	client = pymongo.MongoClient()
-	db = client.RSSdb
+	rdb = client.RSSdb
 
 	while True:
 		insertentries(refreshfeeds())
@@ -43,8 +52,8 @@ def insertentries (RSSfeeds):
 			"date": entry.published,
 			"date stored": time.time(),
 			"sentiment": getsentiment(entry.summary)}
-			if db.posts.find({"title": entry.title}).count() == 0:
-				db.posts.insert_one(post)
+			if rdb.posts.find({"title": entry.title}).count() == 0:
+				rdb.posts.insert_one(post)
 				print "\"" + entry.title + "\" added"
 			else:
 				print "\"" + entry.title + "\" already exists"
@@ -92,16 +101,15 @@ def getsentiment (statement):
 				elif dictword[1].rstrip('\n') == sentiments[1]:
 					n+=1
 				break
-	print "P: " + str(p) + "\tN: " + str(n)
+#	print "P: " + str(p) + "\tN: " + str(n)
 	x = float(p)/n
 	return x		
 
 def listsentiments ():
-	cursor = db.posts.find({"sentiment": {"$gt": 0}},{"_id": 0, "title": 1, "sentiment": 1}).sort("sentiment", pymongo.DESCENDING)
+	cursor = rdb.posts.find({"sentiment": {"$gt": 0}},{"_id": 0, "title": 1, "sentiment": 1}).sort("sentiment", pymongo.DESCENDING)
 	for document in cursor:
 		print document
 	return
-
 
 def trainer (RSSfeeds):
 	sentimentdictionary = open('sentimentdictionary', 'r')
@@ -183,9 +191,63 @@ def listfeeds ():
 
 def deldb ():
 	client.drop_database('RSSdb')
+	client.drop_database('Companydb')
 	return
 
+def getrating(company):
+	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
+	temp = []
+	rating = 0
+	for entry in feed.entries:
+#		print "\"" + entry.summary + "\"\n"
+		rating = rating + getsentiment(entry.summary);
+	if (len(feed) != 0):
+		rating = rating/len(feed)
+	return rating
+	
+def updatecompaniesdb():
+	companies = []
+	getcompanies(companies)
+	for company in companies:
+		if cdb.companies.find({"company": company[0]}).count() == 0:
+			rating = getrating(company)
+			post = { 
+			"company": company[0],
+			"symbol": company[1],
+			"sector": company[2],
+			"industry": company[3],
+			"rating": rating
+			}
+			cdb.companies.insert_one(post)
+			print "\"" + company[0] + "\" added. rating = " + str(rating)
+		else:
+			rating = getrating(company)
+			result = cdb.companies.update_one({"company": company}, {"$set": {"rating": rating}})
+			print "\"" + company[0] + "\" already exists. New rating = " + str(rating)
+
+def getcompanies(companies):
+	tempdir = r'./temp' 
+	if not os.path.exists(tempdir):
+		os.makedirs(tempdir)
+	NASDAQlistings = open('nasdaq', 'r')
+	lines = NASDAQlistings.readlines()
+	for line in lines:
+		urllib.urlretrieve (line, "./temp/temp.csv")
+		with open("./temp/temp.csv", 'r') as doc:
+			reader = csv.reader(doc)
+			reader. next()	#skip first line
+			for row in reader:
+				company = []
+				company.append(row[1])
+				company.append(row[0])
+				company.append(row[7])
+				company.append(row[8])
+				companies.append(company)
+	
+
+
 def mainmenu ():
+	updatecompaniesdb()
 	while True:
 #		try:
 		option = input( "Options:\n1: Create a database and save stuff\n2: list feed urls\n3: add feed to list\n4: remove feed from list\n5: print feeds\n6: train sentiment analyzer\n7: analyze sentiments\n8: Show sentiments\n9: delete database\n10: exit\n")
@@ -220,3 +282,4 @@ def mainmenu ():
 
 #initsystem()
 mainmenu()
+
