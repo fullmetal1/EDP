@@ -8,6 +8,7 @@ import string
 import urllib
 import csv
 import os
+from multiprocessing import Pool
 
 try:
 	client = pymongo.MongoClient()
@@ -204,26 +205,38 @@ def getrating(company):
 	if (len(feed) != 0):
 		rating = rating/len(feed)
 	return rating
-	
-def updatecompaniesdb():
+
+def companyupdate(company):
+	client = pymongo.MongoClient()
+	cdb = client.Companydb
+
+	if cdb.companies.find({"company": company[0]}).count() == 0:
+		rating = getrating(company)
+		post = { 
+		"company": company[0],
+		"symbol": company[1],
+		"sector": company[2],
+		"industry": company[3],
+		"rating": rating,
+		"updated": time.time()
+		}
+		cdb.companies.insert_one(post)
+#		print "\"" + company[0] + "\" added. rating = " + str(rating)
+	else:
+		rating = getrating(company)
+		result = cdb.companies.update_one({"company": company}, {"$set": {"rating": rating, "updated": time.time()}})
+#		print "\"" + company[0] + "\" already exists. New rating = " + str(rating)
+
+def batchcompanyupdate():
+	gettime = time.time()
+	pool = Pool(processes=50)
 	companies = []
-	getcompanies(companies)
-	for company in companies:
-		if cdb.companies.find({"company": company[0]}).count() == 0:
-			rating = getrating(company)
-			post = { 
-			"company": company[0],
-			"symbol": company[1],
-			"sector": company[2],
-			"industry": company[3],
-			"rating": rating
-			}
-			cdb.companies.insert_one(post)
-			print "\"" + company[0] + "\" added. rating = " + str(rating)
-		else:
-			rating = getrating(company)
-			result = cdb.companies.update_one({"company": company}, {"$set": {"rating": rating}})
-			print "\"" + company[0] + "\" already exists. New rating = " + str(rating)
+	companies = getcompanies(companies)
+	
+	pool.imap_unordered(companyupdate, companies)
+	
+	gettime = time.time() - gettime
+	print "Total time to complete: " + str(gettime)
 
 def getcompanies(companies):
 	tempdir = r'./temp' 
@@ -243,14 +256,19 @@ def getcompanies(companies):
 				company.append(row[7])
 				company.append(row[8])
 				companies.append(company)
-	
+	return companies
 
+def printcompanyinfo(name):
+	cursor = cdb.companies.find({"company": name})
+	for document in cursor:
+		print document
+	return
 
 def mainmenu ():
-	updatecompaniesdb()
+	batchcompanyupdate()
 	while True:
 #		try:
-		option = input( "Options:\n1: Create a database and save stuff\n2: list feed urls\n3: add feed to list\n4: remove feed from list\n5: print feeds\n6: train sentiment analyzer\n7: analyze sentiments\n8: Show sentiments\n9: delete database\n10: exit\n")
+		option = input( "Options:\n1: Create a database and save stuff\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Print feeds\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Delete database\n10: Exit\n")
 		if option == 1:
 			initdb()
 		elif option == 2:
@@ -266,10 +284,8 @@ def mainmenu ():
 		elif option == 6:
 			trainer(refreshfeeds())
 		elif option == 7:
-			feeds = refreshfeeds()
-			for feed in feeds:
-				for entry in feed.entries:
-					print "\"" + entry.summary + "\"" + " " + str(getsentiment(entry.summary))
+			name = raw_input("Enter Company name: ")
+			printcompanyinfo(name)
 		elif option == 8:
 			listsentiments()
 		elif option == 9:
