@@ -9,13 +9,13 @@ import urllib
 import csv
 import os
 import itertools
+import random
 from multiprocessing import Pool, Manager
 from string import punctuation
 from shutil import copyfile
 
-
 try:
-	client = pymongo.MongoClient()
+	client = pymongo.MongoClient(connect = False)
 	rdb = client.RSSdb
 	rdb.createCollection( "RSSdb", { capped: true, max: 100 } )
 except:
@@ -30,7 +30,7 @@ try:
 	ddb.createCollection( "Dictionarydb", { } )
 except:
 	print "Dictionary database already exists"
-
+	
 def initsystem ():
 	client = pymongo.MongoClient()
 	rdb = client.RSSdb
@@ -92,22 +92,14 @@ def printfeeds (RSSfeeds):
 	return
 
 def getsentiment (statement, dictionary):
-	sentimentdictionary = open(dictionary, 'r')
-	lines = sentimentdictionary.readlines()
-	sentimentdictionary.close()
-	dictwords = []
-	for line in lines:
-		dictword = line.split(',')
-		dictwords.append(dictword)
 	words = ''.join(c for c in statement if c not in punctuation).lower().split()
 	numwords = 0
 	x = 0
 	for word in words:
-		for dictword in dictwords:
-			if word.encode('utf-8','ignore') == dictword[0]:
-				numwords += 1
-				x += float(int(dictword[2])-int(dictword[3]))/int(dictword[1])
-				break
+		if ddb.dictionary.find({"word": word.encode('utf-8','ignore')}).count() != 0:
+			numwords += 1
+			dictword = json.load(db.dictionary.findone({"word": word.encode('utf-8','ignore')}))
+			x += float(int(dictword[2])-int(dictword[3]))/int(dictword[1])
 	if numwords != 0:
 		x /= numwords	
 	return x		
@@ -118,16 +110,25 @@ def listsentiments ():
 		print document
 	return
 
+def printdictionary ():
+	for document in ddb.dictionary.find():
+		print document
+	print ddb.dictionary.find().count()
+
 def autotrain ():
 	gettime = time.time()
 	companies = getcompanies()
 
 	pool = Pool(processes=50)
+	client.close()
 	pool.imap_unordered(autotrainer, companies)
 	gettime = time.time() - gettime
 	print "Total time to complete: " + str(gettime)
 
 def autotrainer (company):
+	client = pymongo.MongoClient()
+	ddb = client.Dictdb
+
 	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
 	for entry in feed.entries:
 		if 'summary' in entry and entry.summary != "":
@@ -138,9 +139,9 @@ def autotrainer (company):
 			statement = entry.title
 		else:
 			break
-		if getsentiment(statement, "autosentimentdictionary") >= 0.4:
+		if getsentiment(statement, "autosentimentdictionary") >= 2.0/3:
 			sentiment = 'p'
-		elif getsentiment(statement, "autosentimentdictionary") > -0.4:
+		elif getsentiment(statement, "autosentimentdictionary") > -2.0/3:
 			sentiment = 'a'
 		else:
 			sentiment = 'n'
@@ -190,6 +191,7 @@ def trainer ():
 		dictwords.append(temp)
 		
 	companies = getcompanies()
+	random.shuffle(companies)
 	for company in companies:
 		feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
 		for entry in feed.entries:
@@ -240,7 +242,13 @@ def trainer ():
 			}
 			ddb.dictionary.insert_one(post)
 		else:
-			result = cdb.companies.update_one({"word": dictword[0]}, {"$set": {"seen": dictword[1], "positive": dictword[2], "negative": dictword[3]}})
+			dictword = json.load(db.dictionary.findone({"word": word.encode('utf-8','ignore')}))
+			if sentiment == 'p':
+				ddb.dictionary.update_one({"word": word}, {"$set": {"seen": dictword.seen+1, "positive": dictword.positive+1, "negative": dictword.negative}})
+			elif sentiment == 'n':
+				ddb.dictionary.update_one({"word": word}, {"$set": {"seen": dictword.seen+1, "positive": dictword.positive, "negative": dictword.negative+1}})
+			else:
+				ddb.dictionary.update_one({"word": word}, {"$set": {"seen": dictword.seen+1, "positive": dictword.positive, "negative": dictword.negative}})
 		print>>sentimentdictionary, dictword[0]+","+str(dictword[1])+","+str(dictword[2])+","+str(dictword[3])
 	sentimentdictionary.close()
 	return
@@ -282,6 +290,7 @@ def listfeeds ():
 def deldb ():
 	client.drop_database('RSSdb')
 	client.drop_database('Companydb')
+	client.drop_database('Dictdb')
 	return
 
 def getrating (company):
@@ -323,8 +332,7 @@ def getstockrating(company):
 			rating = analyzestockdata(row)
 	os.remove("./temp/"+company[1]+"tempquote.csv")
 	return rating
-#	urllib.urlretrieve ("http://finance.yahoo.com/d/quotes.csv?s="+tempstr+"&f=abb2b3poc1vv6k2p2c8c3ghk1ll1t8w1w4p1mm2kjj5k4j6k5wva5b6k3a2ee7e8e9b4j4p5p6rr2r5r6r7s7ydr1qd1d2t1m5m6m7m8m3m4g1g3g4g5g6vj1j3f6nn4ss1xj2t7t6i5l2l3v1v7s6", "./temp/temp.csv")
-		
+#	urllib.urlretrieve ("http://finance.yahoo.com/d/quotes.csv?s="+tempstr+"&f=abb2b3poc1vv6k2p2c8c3ghk1ll1t8w1w4p1mm2kjj5k4j6k5wva5b6k3a2ee7e8e9b4j4p5p6rr2r5r6r7s7ydr1qd1d2t1m5m6m7m8m3m4g1g3g4g5g6vj1j3f6nn4ss1xj2t7t6i5l2l3v1v7s6", "./temp/temp.csv")	
 
 def companyupdate(company):
 	client = pymongo.MongoClient()
@@ -353,6 +361,7 @@ def batchcompanyupdate():
 	companies = []
 	companies = getcompanies()
 	
+	client.close()
 	pool.imap_unordered(companyupdate, companies)
 	
 	gettime = time.time() - gettime
@@ -397,10 +406,9 @@ def test ():
 	ddb.dictionary.insert_one(post)
 
 def mainmenu ():
-	batchcompanyupdate()
 	while True:
 #		try:
-		option = input( "Options:\n1: Recreate Database\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Let the sentiment analyzer train itself\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Test yahoo financial data\n10: Exit\n")
+		option = input( "Options:\n1: Recreate Database\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Let the sentiment analyzer train itself\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Show current dictionary\n10: Exit\n")
 		if option == 1:
 			deldb()
 			initdb()
@@ -422,12 +430,15 @@ def mainmenu ():
 		elif option == 8:
 			listsentiments()
 		elif option == 9:
-			getstockrating(["Apple Inc", "AAPL"])
+			printdictionary()
 		elif option == 10:
 			return
 #		except:
 #			print "error"
 	return
+
+batchcompanyupdate()
+
 
 #initsystem()
 mainmenu()
