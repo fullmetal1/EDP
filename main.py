@@ -8,8 +8,11 @@ import string
 import urllib
 import csv
 import os
-from multiprocessing import Pool
+import itertools
+from multiprocessing import Pool, Manager
 from string import punctuation
+from shutil import copyfile
+
 
 try:
 	client = pymongo.MongoClient()
@@ -22,7 +25,11 @@ try:
 	cdb.createCollection( "Companydb", { } )
 except:
 	print "Company database already exists"
-
+try:
+	ddb = client.Dictdb
+	ddb.createCollection( "Dictionarydb", { } )
+except:
+	print "Dictionary database already exists"
 
 def initsystem ():
 	client = pymongo.MongoClient()
@@ -53,7 +60,7 @@ def insertentries (RSSfeeds):
 			"url": entry.link,
 			"date": entry.published,
 			"date stored": time.time(),
-			"sentiment": getsentiment(entry.summary)}
+			"sentiment": getsentiment(entry.summary, "sentimentdictionary")}
 			if rdb.posts.find({"title": entry.title}).count() == 0:
 				rdb.posts.insert_one(post)
 				print "\"" + entry.title + "\" added"
@@ -77,34 +84,32 @@ def printfeeds (RSSfeeds):
 			print feed.url,
 			print entry.title,
 			print entry.author,
-			print entry.summary,
+			print entry.summary,	
 			print entry.link,
 			print entry.published,
 			print time.time(),
-			print getsentiment(entry.summary)
+			print getsentiment(entry.summary, "sentimentdictionary")
 	return
 
-def getsentiment (statement):
-	sentimentdictionary = open('sentimentdictionary', 'r')
+def getsentiment (statement, dictionary):
+	sentimentdictionary = open(dictionary, 'r')
 	lines = sentimentdictionary.readlines()
 	sentimentdictionary.close()
 	dictwords = []
 	for line in lines:
 		dictword = line.split(',')
 		dictwords.append(dictword)
-	words = statement.split()
-	t = 1
-	p = 1
-	n = 1
-	sentiments = ['p', 'n', 'a']
+	words = ''.join(c for c in statement if c not in punctuation).lower().split()
+	numwords = 0
+	x = 0
 	for word in words:
 		for dictword in dictwords:
-			if word == dictword[0]:
-				t += int(dictword[1])
-				p += int(dictword[2])
-				n += int(dictword[3])
+			if word.encode('utf-8','ignore') == dictword[0]:
+				numwords += 1
+				x += float(int(dictword[2])-int(dictword[3]))/int(dictword[1])
 				break
-	x = float(p-n)/t
+	if numwords != 0:
+		x /= numwords	
 	return x		
 
 def listsentiments ():
@@ -112,6 +117,67 @@ def listsentiments ():
 	for document in cursor:
 		print document
 	return
+
+def autotrain ():
+	gettime = time.time()
+	companies = getcompanies()
+
+	pool = Pool(processes=50)
+	pool.imap_unordered(autotrainer, companies)
+	gettime = time.time() - gettime
+	print "Total time to complete: " + str(gettime)
+
+def autotrainer (company):
+	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
+	for entry in feed.entries:
+		if 'summary' in entry and entry.summary != "":
+			words = ''.join(c for c in entry.summary if c not in punctuation).lower().split()
+			statement = entry.summary
+		elif 'title' in entry and entry.title != "":
+			words = ''.join(c for c in entry.title if c not in punctuation).lower().split()
+			statement = entry.title
+		else:
+			break
+		if getsentiment(statement, "autosentimentdictionary") >= 0.4:
+			sentiment = 'p'
+		elif getsentiment(statement, "autosentimentdictionary") > -0.4:
+			sentiment = 'a'
+		else:
+			sentiment = 'n'
+		for word in words:
+			if ddb.dictionary.find({"word": word.encode('utf-8','ignore')}).count() == 0:
+				if sentiment == 'p':
+					post = { 
+					"word": word.encode('utf-8','ignore'),
+					"seen": 1,
+					"positive": 1,
+					"negative": 0,
+					}
+				elif sentiment == 'n':
+					post = { 
+					"word": word.encode('utf-8','ignore'),
+					"seen": 1,
+					"positive": 0,
+					"negative": 1,
+					}
+				else:
+					post = { 
+					"word": word.encode('utf-8','ignore'),
+					"seen": 1,
+					"positive": 0,
+					"negative": 0,
+					}
+				ddb.dictionary.insert_one(post)
+			else:
+				dictword = json.load(db.dictionary.findone({"word": word.encode('utf-8','ignore')}))
+				if sentiment == 'p':
+					ddb.dictionary.update_one({"word": word}, {"$set": {"seen": dictword.seen+1, "positive": dictword.positive+1, "negative": dictword.negative}})
+				elif sentiment == 'n':
+					ddb.dictionary.update_one({"word": word}, {"$set": {"seen": dictword.seen+1, "positive": dictword.positive, "negative": dictword.negative+1}})
+				else:
+					ddb.dictionary.update_one({"word": word}, {"$set": {"seen": dictword.seen+1, "positive": dictword.positive, "negative": dictword.negative}})
+			
+		
 
 def trainer ():
 	sentimentdictionary = open('sentimentdictionary', 'a')
@@ -122,24 +188,26 @@ def trainer ():
 	for line in lines:
 		temp = line.rstrip('\n').split(',')
 		dictwords.append(temp)
+		
 	companies = getcompanies()
 	for company in companies:
 		feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
 		for entry in feed.entries:
 			if 'summary' in entry and entry.summary != "":
 				words = ''.join(c for c in entry.summary if c not in punctuation).lower().split()
-				sentiment = raw_input("\"" + entry.summary + "\"\n")
+				sentiment = raw_input("\"" + entry.summary.encode('utf-8','ignore') + "\"\n")
 			elif 'title' in entry and entry.title != "":
 				words = ''.join(c for c in entry.title if c not in punctuation).lower().split()
-				sentiment = raw_input("\"" + entry.title + "\"\n")
+				sentiment = raw_input("\"" + entry.title.encode('utf-8','ignore') + "\"\n")
 			else:
 				break
 			if sentiment == 'e':
 				break
 			for word in words:
+
 				exists = False
 				for dictword in dictwords:
-					if word == dictword[0]:
+					if word.encode('utf-8','ignore') == dictword[0]:
 						exists = True
 						break
 					else:
@@ -152,17 +220,27 @@ def trainer ():
 						dictword[3] = int(dictword[3]) + 1
 				else:
 					if sentiment == 'p':
-						dictwords.append([word, 1, 1, 0])
+						dictwords.append([word.encode('utf-8','ignore'), 1, 1, 0])
 					elif sentiment == 'n':
-						dictwords.append([word, 1, 0, 1])
+						dictwords.append([word.encode('utf-8','ignore'), 1, 0, 1])
 					elif sentiment == 'a':
-						dictwords.append([word, 1, 0, 0])
+						dictwords.append([word.encode('utf-8','ignore'), 1, 0, 0])
 		if sentiment == 'e':
 			break
 	sentimentdictionary.close()
 	os.remove('sentimentdictionary')
 	sentimentdictionary = open('sentimentdictionary', 'w')
 	for dictword in dictwords:
+		if ddb.dictionary.find({"word": dictword}).count() == 0:
+			post = { 
+			"word": dictword[0],
+			"seen": dictword[1],
+			"positive": dictword[2],
+			"negative": dictword[3],
+			}
+			ddb.dictionary.insert_one(post)
+		else:
+			result = cdb.companies.update_one({"word": dictword[0]}, {"$set": {"seen": dictword[1], "positive": dictword[2], "negative": dictword[3]}})
 		print>>sentimentdictionary, dictword[0]+","+str(dictword[1])+","+str(dictword[2])+","+str(dictword[3])
 	sentimentdictionary.close()
 	return
@@ -206,19 +284,19 @@ def deldb ():
 	client.drop_database('Companydb')
 	return
 
-def getrating(company):
+def getrating (company):
 	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
 	temp = []
 	rating = 0
 	for entry in feed.entries:
 #		print "\"" + entry.summary + "\"\n"
-		rating = rating + getsentiment(entry.summary);
+		rating = rating + getsentiment(entry.summary, "sentimentdictionary");
 	if (len(feed) != 0):
 		rating = rating/len(feed)
 	rating = rating + getstockrating(company)
-	return ratin
+	return rating
 
-def analyzestockdata(data):
+def analyzestockdata (data):
 	ticker = data[0]
 	ask = data[1]
 	bid = data[2]
@@ -231,7 +309,7 @@ def analyzestockdata(data):
 	volume = data[9]
 	asksize = data[10]
 	bidsize = data[11]
-	return float(opn-clse)/clse;
+	return float(opn)-float(clse)/float(clse);
 
 def getstockrating(company):
 	tempdir = r'./temp' 
@@ -308,11 +386,21 @@ def printcompanyinfo(name):
 		print document
 	return
 
+def test ():
+	ddb.dictionary
+	post = { 
+		"word": dictword[0],
+		"seen": dictword[1],
+		"positive": dictword[2],
+		"negative": dictword[3],
+		}
+	ddb.dictionary.insert_one(post)
+
 def mainmenu ():
 	batchcompanyupdate()
 	while True:
 #		try:
-		option = input( "Options:\n1: Recreate Database\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Print feeds\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Test yahoo financial data\n10: Exit\n")
+		option = input( "Options:\n1: Recreate Database\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Let the sentiment analyzer train itself\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Test yahoo financial data\n10: Exit\n")
 		if option == 1:
 			deldb()
 			initdb()
@@ -325,7 +413,7 @@ def mainmenu ():
 			link = raw_input("Enter URL: ")
 			remfeed(link)
 		elif option == 5:
-			printfeeds(refreshfeeds())
+			autotrain()
 		elif option == 6:
 			trainer()
 		elif option == 7:
