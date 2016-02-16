@@ -100,9 +100,9 @@ def getsentiment (statement):
 	for word in words:
 		for dictword in dictwords:
 			if word == dictword[0]:
-				t = int(dictword[1])
-				p = int(dictword[2])
-				n = int(dictword[3])
+				t += int(dictword[1])
+				p += int(dictword[2])
+				n += int(dictword[3])
 				break
 	x = float(p-n)/t
 	return x		
