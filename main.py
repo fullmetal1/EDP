@@ -9,6 +9,7 @@ import urllib
 import csv
 import os
 from multiprocessing import Pool
+from string import punctuation
 
 try:
 	client = pymongo.MongoClient()
@@ -86,24 +87,24 @@ def printfeeds (RSSfeeds):
 def getsentiment (statement):
 	sentimentdictionary = open('sentimentdictionary', 'r')
 	lines = sentimentdictionary.readlines()
+	sentimentdictionary.close()
 	dictwords = []
 	for line in lines:
 		dictword = line.split(',')
 		dictwords.append(dictword)
 	words = statement.split()
+	t = 1
 	p = 1
 	n = 1
 	sentiments = ['p', 'n', 'a']
 	for word in words:
 		for dictword in dictwords:
 			if word == dictword[0]:
-				if dictword[1].rstrip('\n') == sentiments[0]:
-					p+=1
-				elif dictword[1].rstrip('\n') == sentiments[1]:
-					n+=1
+				t = int(dictword[1])
+				p = int(dictword[2])
+				n = int(dictword[3])
 				break
-#	print "P: " + str(p) + "\tN: " + str(n)
-	x = float(p)/n
+	x = float(p-n)/t
 	return x		
 
 def listsentiments ():
@@ -112,47 +113,57 @@ def listsentiments ():
 		print document
 	return
 
-def trainer (RSSfeeds):
-	sentimentdictionary = open('sentimentdictionary', 'r')
+def trainer ():
+	sentimentdictionary = open('sentimentdictionary', 'a')
+	sentimentdictionary.close()
+	sentimentdictionary = open('sentimentdictionary', 'r+')
 	lines = sentimentdictionary.readlines()
 	dictwords = []
-	sentiments = ['p', 'n', 'a']
-	exitkeys = ['e']
-	done = False
 	for line in lines:
-		temp = line.split(',')
+		temp = line.rstrip('\n').split(',')
 		dictwords.append(temp)
-	print "ready\n"
-	for feed in RSSfeeds:
-		print feed.url
+	companies = getcompanies()
+	for company in companies:
+		feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
 		for entry in feed.entries:
-			words = entry.summary.lower().split()
+			if 'summary' in entry and entry.summary != "":
+				words = ''.join(c for c in entry.summary if c not in punctuation).lower().split()
+				sentiment = raw_input("\"" + entry.summary + "\"\n")
+			elif 'title' in entry and entry.title != "":
+				words = ''.join(c for c in entry.title if c not in punctuation).lower().split()
+				sentiment = raw_input("\"" + entry.title + "\"\n")
+			else:
+				break
+			if sentiment == 'e':
+				break
 			for word in words:
-				word = word.strip(string.punctuation)
 				exists = False
 				for dictword in dictwords:
 					if word == dictword[0]:
 						exists = True
-				if exists == False:
-					try :
-						sentiment = raw_input("\"" + word + "\"\n")
-					except:
-						sentiment = 'q'
-					if sentiment in sentiments:
-						dictwords.append([word, sentiment])
-						newdictentry= word + "," + sentiment + "\n"
-						print newdictentry
-						lines.append(newdictentry)
-					elif sentiment in exitkeys:
-						done = True
-					if done == True: break
-				if done == True: break
-			if done == True: break
-		if done == True: break
+						break
+					else:
+						continue
+				if exists == True:
+					dictword[1] = int(dictword[1]) + 1
+					if sentiment == 'p':
+						dictword[2] = int(dictword[2]) + 1
+					elif sentiment == 'n':
+						dictword[3] = int(dictword[3]) + 1
+				else:
+					if sentiment == 'p':
+						dictwords.append([word, 1, 1, 0])
+					elif sentiment == 'n':
+						dictwords.append([word, 1, 0, 1])
+					elif sentiment == 'a':
+						dictwords.append([word, 1, 0, 0])
+		if sentiment == 'e':
+			break
 	sentimentdictionary.close()
+	os.remove('sentimentdictionary')
 	sentimentdictionary = open('sentimentdictionary', 'w')
-	for line in lines:
-		print>>sentimentdictionary, line.rstrip('\n')
+	for dictword in dictwords:
+		print>>sentimentdictionary, dictword[0]+","+str(dictword[1])+","+str(dictword[2])+","+str(dictword[3])
 	sentimentdictionary.close()
 	return
 
@@ -204,7 +215,38 @@ def getrating(company):
 		rating = rating + getsentiment(entry.summary);
 	if (len(feed) != 0):
 		rating = rating/len(feed)
+	rating = rating + getstockrating(company)
+	return ratin
+
+def analyzestockdata(data):
+	ticker = data[0]
+	ask = data[1]
+	bid = data[2]
+	opn = data[3]
+	clse = data[4]
+	change = data[5]
+	daylow = data[6]
+	dayhigh = data[7]
+	yearlow = data[8]
+	volume = data[9]
+	asksize = data[10]
+	bidsize = data[11]
+	return float(opn-clse)/clse;
+
+def getstockrating(company):
+	tempdir = r'./temp' 
+	if not os.path.exists(tempdir):
+		os.makedirs(tempdir)
+	rating = 0
+	urllib.urlretrieve ("http://finance.yahoo.com/d/quotes.csv?s="+company[1]+"&f=sabopc1ghjkva5b6", "./temp/"+company[1]+"tempquote.csv")
+	with open("./temp/"+company[1]+"tempquote.csv", 'r') as doc:
+		reader = csv.reader(doc)
+		for row in reader:
+			rating = analyzestockdata(row)
+	os.remove("./temp/"+company[1]+"tempquote.csv")
 	return rating
+#	urllib.urlretrieve ("http://finance.yahoo.com/d/quotes.csv?s="+tempstr+"&f=abb2b3poc1vv6k2p2c8c3ghk1ll1t8w1w4p1mm2kjj5k4j6k5wva5b6k3a2ee7e8e9b4j4p5p6rr2r5r6r7s7ydr1qd1d2t1m5m6m7m8m3m4g1g3g4g5g6vj1j3f6nn4ss1xj2t7t6i5l2l3v1v7s6", "./temp/temp.csv")
+		
 
 def companyupdate(company):
 	client = pymongo.MongoClient()
@@ -231,31 +273,33 @@ def batchcompanyupdate():
 	gettime = time.time()
 	pool = Pool(processes=50)
 	companies = []
-	companies = getcompanies(companies)
+	companies = getcompanies()
 	
 	pool.imap_unordered(companyupdate, companies)
 	
 	gettime = time.time() - gettime
 	print "Total time to complete: " + str(gettime)
 
-def getcompanies(companies):
+def getcompanies():
+	companies = []
 	tempdir = r'./temp' 
 	if not os.path.exists(tempdir):
 		os.makedirs(tempdir)
 	NASDAQlistings = open('nasdaq', 'r')
 	lines = NASDAQlistings.readlines()
 	for line in lines:
-		urllib.urlretrieve (line, "./temp/temp.csv")
-		with open("./temp/temp.csv", 'r') as doc:
+		urllib.urlretrieve (line, "./temp/templistings.csv")
+		with open("./temp/templistings.csv", 'r') as doc:
 			reader = csv.reader(doc)
 			reader. next()	#skip first line
 			for row in reader:
 				company = []
-				company.append(row[1])
-				company.append(row[0])
-				company.append(row[7])
-				company.append(row[8])
+				company.append(row[1])	#company name
+				company.append(row[0])	#company ticker
+				company.append(row[6])	#company sector
+				company.append(row[7])	#company industry
 				companies.append(company)
+		os.remove("./temp/templistings.csv")
 	return companies
 
 def printcompanyinfo(name):
@@ -268,8 +312,9 @@ def mainmenu ():
 	batchcompanyupdate()
 	while True:
 #		try:
-		option = input( "Options:\n1: Create a database and save stuff\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Print feeds\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Delete database\n10: Exit\n")
+		option = input( "Options:\n1: Recreate Database\n2: List feed urls\n3: Add feed to list\n4: Remove feed from list\n5: Print feeds\n6: Train sentiment analyzer\n7: Get info on a company\n8: Show sentiments\n9: Test yahoo financial data\n10: Exit\n")
 		if option == 1:
+			deldb()
 			initdb()
 		elif option == 2:
 			listfeeds()
@@ -282,14 +327,14 @@ def mainmenu ():
 		elif option == 5:
 			printfeeds(refreshfeeds())
 		elif option == 6:
-			trainer(refreshfeeds())
+			trainer()
 		elif option == 7:
 			name = raw_input("Enter Company name: ")
 			printcompanyinfo(name)
 		elif option == 8:
 			listsentiments()
 		elif option == 9:
-			deldb()
+			getstockrating(["Apple Inc", "AAPL"])
 		elif option == 10:
 			return
 #		except:
