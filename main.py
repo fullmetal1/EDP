@@ -10,6 +10,13 @@ import csv
 import os
 import itertools
 import random
+import mechanize
+import datetime
+from datetime import date, timedelta
+from stem import Signal
+from stem.control import Controller
+import socks
+import socket
 from multiprocessing import Pool, Manager
 from string import punctuation
 from shutil import copyfile
@@ -22,6 +29,7 @@ from string import punctuation
 from pandas import  date_range
 from pandas import  bdate_range
 from datetime import datetime
+from jdcal import gcal2jd, jd2gcal
 from pandas.tseries.offsets import DateOffset, BDay
 from yahoo_finance import Share
 
@@ -55,7 +63,6 @@ def getimportantsentiment (statement, importantwords):
 	words = ''.join(c for c in statement if c not in punctuation).lower().split()
 	numwords = 0
 	x = 0
-	importantwords = importantwords.split(',')
 	for word in words:
 		if ddb.dictionary.find({"word": word}).count() != 0:
 			numwords += 1
@@ -86,13 +93,9 @@ def listsentiments ():
 	companies = getcompanies()
 	company = random.choice(companies)
 	print company[1]
-	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
-	length = len(feed)
-	for entry in feed.entries:
-		if 'summary' in entry and entry.summary != "":
-			print entry.summary.encode('utf-8','ignore') + "\n" + str(getsentiment(entry.summary.encode('utf-8','ignore')))
-		elif 'title' in entry and entry.title != "":
-			print entry.title.encode('utf-8','ignore') + "\n" + str(getsentiment(entry.title.encode('utf-8','ignore')))
+	articles = getarticles(company[1])
+	for article in articles:
+		print article + "\n" + str(getsentiment(article))
 
 def printdictionary ():
 	for document in ddb.dictionary.find():
@@ -140,35 +143,24 @@ def autotrain ():
 	print "Total time to complete: " + str(gettime)
 	print "now testing database"
 	for company in companies:
-		feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
-		length = len(feed)
-		for entry in feed.entries:
-			if 'summary' in entry and entry.summary != "":
-				print entry.summary.encode('utf-8') + "\n" + str(getsentiment(entry.summary.encode('utf-8','ignore')))
-			elif 'title' in entry and entry.title != "":
-				print entry.title.encode('utf-8') + "\n" + str(getsentiment(entry.title.encode('utf-8','ignore')))
+		articles = getarticles(company[1])
+		for article in articles:
+			print article + "\n" + str(getsentiment(article))
 		
 def autotrainer (company):
 	client = pymongo.MongoClient()
 	ddb = client.Dictdb
 
-	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
-	for entry in feed.entries:
-		if 'summary' in entry and entry.summary != "":
-			words = ''.join(c for c in entry.summary if c not in punctuation).lower().split()
-			statement = entry.summary
-		elif 'title' in entry and entry.title != "":
-			words = ''.join(c for c in entry.title if c not in punctuation).lower().split()
-			statement = entry.title
-		else:
-			break
-		if getsentiment(statement) >= 1.0/3:
+	articles = getarticles(company[1])
+	for article in articles:
+		articlesentiment = getsentiment(article)
+		if articlesentiment >= 1.0/3:
 			sentiment = 'p'
-		elif getsentiment(statement) > -1.0/3:
+		elif articlesentiment > -1.0/3:
 			sentiment = 'a'
 		else:
 			sentiment = 'n'
-		for word in words:
+		for word in article.split():
 			if ddb.dictionary.find({"word": word.encode('utf-8','ignore')}).count() == 0:
 				if sentiment == 'p':
 					post = { 
@@ -216,19 +208,12 @@ def trainer ():
 	companies = getcompanies()
 	random.shuffle(companies)
 	for company in companies:
-		feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
-		for entry in feed.entries:
-			if 'summary' in entry and entry.summary != "":
-				words = ''.join(c for c in entry.summary if c not in punctuation).lower().split()
-				sentiment = raw_input("\"" + entry.summary.encode('utf-8','ignore') + "\"\n")
-			elif 'title' in entry and entry.title != "":
-				words = ''.join(c for c in entry.title if c not in punctuation).lower().split()
-				sentiment = raw_input("\"" + entry.title.encode('utf-8','ignore') + "\"\n")
-			else:
-				break
+		articles = getarticles(company[1])
+		for article in articles:
+			sentiment = raw_input("\"" + article + "\"\n")
 			if sentiment == 'e':
 				break
-			for word in words:
+			for word in article.split():
 
 				exists = False
 				for dictword in dictwords:
@@ -276,76 +261,38 @@ def trainer ():
 	sentimentdictionary.close()
 	return
 
-
-
 def importantwords (ticker):	
-	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+ticker)
+	words = getwordsfordate(ticker, date.today().strftime('%Y-%m-%d'))
 	fst=''
-	for entry in feed.entries:
-	   
-		if 'title' in entry and entry.title != "":
-			titles =''.join(c for c in entry.title if c not in punctuation).lower()
-			titles= titles.encode('ascii', 'ignore')
-			titles=str(titles)
-			titles_tok = word_tokenize(titles)
-			stop_words = set(stopwords.words("english"))
-			filtered_titles = [w for w in titles_tok if not w in stop_words]
-			fs= str(filtered_titles)
-			fst=fs+fst
-		else:
-			break
-	fst_list = fst.split(",")
-	return fst_list
+	stop_words = set(stopwords.words("english"))
+	filtered_words = [w for w in words if not w in stop_words]
+	return filtered_words
 
 def deldb ():
 	client.drop_database('Companydb')
 	client.drop_database('Dictdb')
 	return
 
-def getrating (company):
-	feed = feedparser.parse("http://finance.yahoo.com/rss/headline?s="+company[1])
+def getrating (ticker):
+	words = getwordsfordate(ticker, date.today().strftime('%Y-%m-%d'))
 	rating = 0
-	length = len(feed)
-	importantwords = importantwords(company)
-	for entry in feed.entries:
-		if 'summary' in entry and entry.summary != "":
-			rating += getimportantsentiment(entry.summary.encode('utf-8','ignore'),importantwords);
-		elif 'title' in entry and entry.title != "":
-			rating += getimportantsentiment(entry.title.encode('utf-8','ignore'),importantwords);
-		else:
-			length -= 1
+	length = len(words)
+	imprtntwrds = importantwords(ticker)
+	rating += getimportantsentiment(" ".join(words),imprtntwrds);
 	if (length != 0):
 		rating = rating/length
 	return rating
 
-def analyzestockdata (data):
-	ticker = data[0]
-	ask = data[1]
-	bid = data[2]
-	opn = data[3]
-	clse = data[4]
-	change = data[5]
-	daylow = data[6]
-	dayhigh = data[7]
-	yearlow = data[8]
-	volume = data[9]
-	asksize = data[10]
-	bidsize = data[11]
+def getstockchange (ticker):
+	yesterday = (date.today() - timedelta(1)).strftime('%Y-%m-%d')
+	try:
+		opn = Share(ticker).get_historical(yesterday, yesterday)[0][u'Open']
+		cls = Share(ticker).get_historical(yesterday, yesterday)[0][u'Close']
+		print opn
+		print cls
+	except:
+		return 0
 	return (float(clse)-float(opn))/float(opn);
-
-def getstockrating (company):
-	tempdir = r'./temp' 
-	if not os.path.exists(tempdir):
-		os.makedirs(tempdir)
-	rating = 0
-	urllib.urlretrieve ("http://finance.yahoo.com/d/quotes.csv?s="+company[1]+"&f=sabopc1ghjkva5b6", "./temp/"+company[1]+"tempquote.csv")
-	with open("./temp/"+company[1]+"tempquote.csv", 'r') as doc:
-		reader = csv.reader(doc)
-		for row in reader:
-			rating = analyzestockdata(row)
-	os.remove("./temp/"+company[1]+"tempquote.csv")
-	return rating
-#	urllib.urlretrieve ("http://finance.yahoo.com/d/quotes.csv?s="+tempstr+"&f=abb2b3poc1vv6k2p2c8c3ghk1ll1t8w1w4p1mm2kjj5k4j6k5wva5b6k3a2ee7e8e9b4j4p5p6rr2r5r6r7s7ydr1qd1d2t1m5m6m7m8m3m4g1g3g4g5g6vj1j3f6nn4ss1xj2t7t6i5l2l3v1v7s6", "./temp/temp.csv")	
 
 def companyupdate (company):
 	client2 = pymongo.MongoClient(connect=False)
@@ -353,7 +300,7 @@ def companyupdate (company):
 	ddb = client2.Dictdb
 
 	if cdb.companies.find({"company": company[0]}).count() == 0:
-		rating = getrating(company)
+		rating = getrating(company[1])
 		post = { 
 		"company": company[0],
 		"symbol": company[1],
@@ -361,19 +308,18 @@ def companyupdate (company):
 		"industry": company[3],
 		"rating": rating,
 		"updated": time.time(),
-		"change": change(company[1])
 		}
 		cdb.companies.insert_one(post)
-#		print "\"" + company[0] + "\" added. rating = " + str(rating)
+		print "\"" + company[0] + "\" added. rating = " + str(rating)
 	else:
-		rating = getrating(company)
-		result = cdb.companies.update_one({"company": company}, {"$set": {"rating": rating, "updated": time.time(), "change": change(company[1])}})
-#		print "\"" + company[0] + "\" already exists. New rating = " + str(rating)
+		rating = getrating(company[1])
+		result = cdb.companies.update_one({"company": company}, {"$set": {"rating": rating, "updated": time.time()}})
+		print "\"" + company[0] + "\" already exists. New rating = " + str(rating)
 	client2.close()
 
 def batchcompanyupdate ():
 	gettime = time.time()
-	pool = Pool(processes=20)
+	pool = Pool(processes=50)
 	companies = []
 	companies = getcompanies()
 	print "A total of " + str(len(companies)) + " companies to update"
@@ -412,15 +358,65 @@ def printcompanyinfo (name):
 		print document
 	return
 
-def test ():
-	ddb.dictionary
-	post = { 
-		"word": dictword[0],
-		"seen": dictword[1],
-		"positive": dictword[2],
-		"negative": dictword[3],
-		}
-	ddb.dictionary.insert_one(post)
+def getwordsfordate(ticker, day):
+	day=day.split('-')
+	year=day[0]
+	month=day[1]
+	day=day[2]
+	jday1= gcal2jd(year,month,day)
+	jday1= jday1[0]+jday1[1]+0.5
+	jday1= int(jday1)
+	js=str(jday1)
+
+	temp = socket.socket
+	socket.socket = socks.socksocket
+	browser = mechanize.Browser()
+	browser.set_handle_robots(False)
+	browser.addheaders= [('User-agent','Chrome')]
+	txt = browser.open("https://www.googleapis.com/customsearch/v1element?key=AIzaSyCVAXiUzRYsML1Pv6RwSG1gunmMikTzQqY&rsz=filtered_cse&num=10&hl=en&prettyPrint=false&source=gcsc&gss=.com&sig=432dd570d1a386253361f581254f9ca1&cx=004415538554621685521:vgwa9iznfuo&q="+ticker+"%20daterange%3A"+js+"%2D"+js+"&googlehost=www.google.com&callback=google.search.Search.apiary9284&nocache=1459649736099").read()
+	socket.socket = temp
+	txt = txt[48:]
+	l= len(txt)
+	txt = txt[:l-2]
+	words = ""
+	for result in json.loads(txt)[u'results']:
+		words += result[u'contentNoFormatting'] + " " + result[u'titleNoFormatting'] + " " + result[u'titleNoFormatting'] + " "
+	words =''.join(c for c in words if c not in punctuation+'-').lower()
+	return words.rstrip('\n').split()
+
+def getarticles(ticker):
+	day=date.today().strftime('%Y-%m-%d').split('-')
+	year=day[0]
+	month=day[1]
+	day=day[2]
+	jday1= gcal2jd(year,month,day)
+	jday1= jday1[0]+jday1[1]+0.5
+	jday1= int(jday1)
+	js=str(jday1)
+
+	temp = socket.socket
+	socket.socket = socks.socksocket
+	browser = mechanize.Browser()
+	browser.set_handle_robots(False)
+	browser.addheaders= [('User-agent','Chrome')]
+	txt = browser.open("https://www.googleapis.com/customsearch/v1element?key=AIzaSyCVAXiUzRYsML1Pv6RwSG1gunmMikTzQqY&rsz=filtered_cse&num=10&hl=en&prettyPrint=false&source=gcsc&gss=.com&sig=432dd570d1a386253361f581254f9ca1&cx=004415538554621685521:vgwa9iznfuo&q="+ticker+"&googlehost=www.google.com&callback=google.search.Search.apiary9284&nocache=1459649736099").read()
+	socket.socket = temp
+	txt = txt[48:]
+	l= len(txt)
+	txt = txt[:l-2]
+	articles = []
+	for result in json.loads(txt)[u'results']:
+		article = result[u'contentNoFormatting'] + " " + result[u'titleNoFormatting'] + " " + result[u'titleNoFormatting'] + " "
+		article = ''.join(c.rstrip('\n') for c in article if c not in punctuation+'-').lower()
+		articles.append(article)
+	return articles
+
+def getclosingpricefordate(ticker, day):
+	try:
+		close = Share(ticker).get_historical(day, day)[0][u'Close']
+	except:
+		close = 0
+	return close
 
 def mainmenu ():
 	while True:
@@ -451,6 +447,14 @@ def mainmenu ():
 #			print "error"
 	return
 
+with Controller.from_port(port = 9051) as controller:
+	controller.authenticate()
+	socks.setdefaultproxy(socks.PROXY_TYPE_SOCKS5, "127.0.0.1", 9050)
+#	socket.socket = socks.socksocket
+
 #initsystem()
 mainmenu()
+
+#for company in getcompanies():
+#	companyupdate (company)
 
