@@ -210,7 +210,7 @@ def trainer ():
 	for company in companies:
 		articles = getarticles(company[1])
 		for article in articles:
-			sentiment = raw_input("\"" + article + "\"\n")
+			sentiment = raw_input("\"" + article.encode("utf8","ignore") + "\"\n")
 			if sentiment == 'e':
 				break
 			for word in article.split():
@@ -358,6 +358,37 @@ def printcompanyinfo (name):
 		print document
 	return
 
+def gettext (ticker, js):
+	browser = mechanize.Browser()
+	browser.set_handle_robots(False)
+	browser.addheaders= [('User-agent','Chrome')]
+	return browser.open("https://www.googleapis.com/customsearch/v1element?key=AIzaSyCVAXiUzRYsML1Pv6RwSG1gunmMikTzQqY&rsz=filtered_cse&num=10&hl=en&prettyPrint=false&source=gcsc&gss=.com&sig=432dd570d1a386253361f581254f9ca1&cx=004415538554621685521:vgwa9iznfuo&q=stocks:"+ticker+"%20daterange%3A"+js+"%2D"+js+"&googlehost=www.google.com&callback=google.search.Search.apiary9284&nocache=1459649736099").read()
+	
+def getarticlesfordate(ticker, day):
+	day=day.split('-')
+	year=day[0]
+	month=day[1]
+	day=day[2]
+	jday1= gcal2jd(year,month,day)
+	jday1= jday1[0]+jday1[1]+0.5
+	jday1= int(jday1)
+	js=str(jday1)
+
+	temp = socket.socket
+	socket.socket = socks.socksocket
+	txt = gettext(ticker, js)
+	socket.socket = temp
+	txt = txt[48:]
+	l= len(txt)
+	txt = txt[:l-2]
+	articles = []
+	for result in json.loads(txt)[u'results']:
+		article = []
+		article.append(result[u'titleNoFormatting'])
+		article.append(result[u'contentNoFormatting'])
+		articles.append(article)
+	return articles
+
 def getwordsfordate(ticker, day):
 	day=day.split('-')
 	year=day[0]
@@ -370,17 +401,14 @@ def getwordsfordate(ticker, day):
 
 	temp = socket.socket
 	socket.socket = socks.socksocket
-	browser = mechanize.Browser()
-	browser.set_handle_robots(False)
-	browser.addheaders= [('User-agent','Chrome')]
-	txt = browser.open("https://www.googleapis.com/customsearch/v1element?key=AIzaSyCVAXiUzRYsML1Pv6RwSG1gunmMikTzQqY&rsz=filtered_cse&num=10&hl=en&prettyPrint=false&source=gcsc&gss=.com&sig=432dd570d1a386253361f581254f9ca1&cx=004415538554621685521:vgwa9iznfuo&q="+ticker+"%20daterange%3A"+js+"%2D"+js+"&googlehost=www.google.com&callback=google.search.Search.apiary9284&nocache=1459649736099").read()
+	txt = gettext(ticker, js)
 	socket.socket = temp
 	txt = txt[48:]
 	l= len(txt)
 	txt = txt[:l-2]
 	words = ""
 	for result in json.loads(txt)[u'results']:
-		words += result[u'contentNoFormatting'] + " " + result[u'titleNoFormatting'] + " " + result[u'titleNoFormatting'] + " "
+		words += result[u'contentNoFormatting'] + " " + result[u'titleNoFormatting']
 	words =''.join(c for c in words if c not in punctuation+'-').lower()
 	return words.rstrip('\n').split()
 
@@ -396,17 +424,14 @@ def getarticles(ticker):
 
 	temp = socket.socket
 	socket.socket = socks.socksocket
-	browser = mechanize.Browser()
-	browser.set_handle_robots(False)
-	browser.addheaders= [('User-agent','Chrome')]
-	txt = browser.open("https://www.googleapis.com/customsearch/v1element?key=AIzaSyCVAXiUzRYsML1Pv6RwSG1gunmMikTzQqY&rsz=filtered_cse&num=10&hl=en&prettyPrint=false&source=gcsc&gss=.com&sig=432dd570d1a386253361f581254f9ca1&cx=004415538554621685521:vgwa9iznfuo&q="+ticker+"&googlehost=www.google.com&callback=google.search.Search.apiary9284&nocache=1459649736099").read()
+	txt = gettext(ticker, js)
 	socket.socket = temp
 	txt = txt[48:]
 	l= len(txt)
 	txt = txt[:l-2]
 	articles = []
 	for result in json.loads(txt)[u'results']:
-		article = result[u'contentNoFormatting'] + " " + result[u'titleNoFormatting'] + " " + result[u'titleNoFormatting'] + " "
+		article = result[u'contentNoFormatting'] + " " + result[u'titleNoFormatting']
 		article = ''.join(c.rstrip('\n') for c in article if c not in punctuation+'-').lower()
 		articles.append(article)
 	return articles
@@ -453,6 +478,7 @@ with Controller.from_port(port = 9051) as controller:
 #	socket.socket = socks.socksocket
 
 #initsystem()
+
 mainmenu()
 
 #for company in getcompanies():
